@@ -30,6 +30,11 @@ export default function ScrollyCanvas({ frameCount = 96 }: { frameCount?: number
     const mobileStep = 3;
     const activeFrameCount = isMobile ? Math.ceil(frameCount / mobileStep) : frameCount;
 
+    const { scrollYProgress } = useScroll({
+        target: containerRef,
+        offset: ["start start", "end end"],
+    });
+
     const drawBitmap = useCallback((index: number) => {
         const canvas = canvasRef.current;
         const bitmap = bitmapsRef.current[index];
