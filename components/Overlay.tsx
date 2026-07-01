@@ -57,24 +57,24 @@ export default function Overlay({ scrollYProgress }: { scrollYProgress: MotionVa
     return (
         <>
             <Section
-                text="Rajesh Chityal."
-                subText="Senior Full Stack Developer"
+                text="Ayan Ahmed."
+                subText="Aspiring AI Engineer · BS Computer Science · UET Lahore"
                 align="center"
                 start={0.05}
                 end={0.2}
                 scrollYProgress={scrollYProgress}
             />
             <Section
-                text="5+ Years Experience."
-                subText="Specializing in React, Node.js, and Scalable Microservices."
+                text="CGPA 3.70 · AI Builder."
+                subText="Building ML, Deep Learning & Generative AI solutions with Python, PyTorch and LangChain."
                 align="left"
                 start={0.3}
                 end={0.45}
                 scrollYProgress={scrollYProgress}
             />
             <Section
-                text="Innovating with AI."
-                subText="Building AI Agents & Voice Assistance Systems."
+                text="Hohnaar Scholar."
+                subText="Government of Pakistan Scholarship · Conducted ML Seminar for 500+ Students."
                 align="right"
                 start={0.6}
                 end={0.75}

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useScroll, useMotionValueEvent } from "framer-motion";
 import Overlay from "./Overlay";
 
-export default function ScrollyCanvas({ frameCount = 75 }: { frameCount?: number }) {
+export default function ScrollyCanvas({ frameCount = 96 }: { frameCount?: number }) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const [images, setImages] = useState<HTMLImageElement[]>([]);

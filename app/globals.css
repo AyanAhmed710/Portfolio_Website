@@ -1,5 +1,19 @@
 @import "tailwindcss";
 
+html {
+  scroll-behavior: smooth;
+}
+
+@keyframes marquee-ltr {
+  from { transform: translateX(-50%); }
+  to   { transform: translateX(0%);   }
+}
+
+@keyframes marquee-rtl {
+  from { transform: translateX(0%);   }
+  to   { transform: translateX(-50%); }
+}
+
 :root {
   --background: #121212;
   --foreground: #ededed;
