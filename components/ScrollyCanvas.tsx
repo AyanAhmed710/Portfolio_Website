@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { useScroll, useMotionValueEvent, motion } from "framer-motion";
+import { useScroll, useMotionValueEvent, motion, AnimatePresence } from "framer-motion";
 import Overlay from "./Overlay";
 
-// ─── shared ─────────────────────────────────────────────────────────────────
+// ─── helpers ─────────────────────────────────────────────────────────────────
 
 function useIsMobile() {
     const [isMobile, setIsMobile] = useState(false);
@@ -35,22 +35,15 @@ function drawBitmapCover(canvas: HTMLCanvasElement, bitmap: ImageBitmap) {
     ctx.drawImage(bitmap, ox, oy, dw, dh);
 }
 
-// ─── mobile config ───────────────────────────────────────────────────────────
-// sequence-mobile/: 32 frames, 800px wide WebP, ~286KB total
-// Source frame indices: 0, 3, 6, … 93  (every 3rd of original 96)
-
-const MOBILE_FRAME_STEP  = 3;   // step between source frames
-const MOBILE_FRAME_COUNT = 32;  // total frames to load
-
-// ─── Canvas component (shared logic) ─────────────────────────────────────────
+// ─── Canvas hero ──────────────────────────────────────────────────────────────
 
 interface HeroProps {
-    frameCount:  number;
-    dir:         string;           // "/sequence-webp/" or "/sequence-mobile/"
-    frameStep:   number;           // source index = logical_i * frameStep
-    scrollVh:    number;           // container height in vh
-    onProgress?: (p: number) => void;
-    onReady?:    () => void;
+    frameCount: number;
+    dir:        string;
+    frameStep:  number;
+    scrollVh:   number;
+    onProgress: (p: number) => void;
+    onReady:    () => void;
 }
 
 function CanvasHero({ frameCount, dir, frameStep, scrollVh, onProgress, onReady }: HeroProps) {
@@ -60,17 +53,22 @@ function CanvasHero({ frameCount, dir, frameStep, scrollVh, onProgress, onReady 
     const loadedMask   = useRef<boolean[]>([]);
     const rafRef       = useRef<number | null>(null);
     const lastFrame    = useRef(-1);
+    // stable refs so the load effect never restarts due to callback churn
+    const onProgressRef = useRef(onProgress);
+    const onReadyRef    = useRef(onReady);
+    useEffect(() => { onProgressRef.current = onProgress; }, [onProgress]);
+    useEffect(() => { onReadyRef.current    = onReady;    }, [onReady]);
 
     const { scrollYProgress } = useScroll({
         target: containerRef,
         offset: ["start start", "end end"],
     });
 
-    // ── draw ────────────────────────────────────────────────────────────────
     const drawFrame = useCallback((index: number) => {
-        const canvas = canvasRef.current;
         const bitmap = bitmaps.current[index];
-        if (!canvas || !bitmap || lastFrame.current === index) return;
+        const canvas = canvasRef.current;
+        if (!canvas || !bitmap) return;
+        if (lastFrame.current === index) return;   // skip if same frame
         lastFrame.current = index;
         if (rafRef.current) cancelAnimationFrame(rafRef.current);
         rafRef.current = requestAnimationFrame(() => {
@@ -79,59 +77,54 @@ function CanvasHero({ frameCount, dir, frameStep, scrollVh, onProgress, onReady 
         });
     }, []);
 
-    // ── load ─────────────────────────────────────────────────────────────────
+    // load — depends only on stable primitives, never restarts
     useEffect(() => {
         let loaded = 0;
         bitmaps.current   = new Array(frameCount).fill(null);
         loadedMask.current = new Array(frameCount).fill(false);
 
         const loadOne = async (i: number) => {
-            const srcIdx  = i * frameStep;
-            const frameId = srcIdx.toString().padStart(4, "0");
+            const frameId = (i * frameStep).toString().padStart(4, "0");
             try {
                 const resp = await fetch(`${dir}${frameId}.webp`);
                 if (!resp.ok) return;
-                bitmaps.current[i]   = await createImageBitmap(await resp.blob());
+                bitmaps.current[i]    = await createImageBitmap(await resp.blob());
                 loadedMask.current[i] = true;
                 loaded++;
-                onProgress?.(loaded / frameCount);
-                if (loaded === 1) { drawFrame(0); }
-                if (loaded === frameCount) onReady?.();
-            } catch { /* skip missing frame */ }
+                onProgressRef.current(loaded / frameCount);
+                if (loaded === 1) drawFrame(0);
+                if (loaded === frameCount) onReadyRef.current();
+            } catch { /* skip */ }
         };
 
-        // frame 0 first for immediate display, then parallel batches
         loadOne(0).then(() => {
             const BATCH = 8;
-            const runBatches = async () => {
+            const run = async () => {
                 for (let i = 1; i < frameCount; i += BATCH) {
                     await Promise.all(
-                        Array.from({ length: Math.min(BATCH, frameCount - i) }, (_, k) => loadOne(i + k))
+                        Array.from({ length: Math.min(BATCH, frameCount - i) },
+                            (_, k) => loadOne(i + k))
                     );
                 }
             };
-            runBatches();
+            run();
         });
 
         return () => { bitmaps.current.forEach(b => b?.close()); };
-    }, [frameCount, dir, frameStep, drawFrame, onProgress, onReady]);
+    }, [frameCount, dir, frameStep, drawFrame]); // stable — never changes
 
-    // ── scroll → frame ───────────────────────────────────────────────────────
     useMotionValueEvent(scrollYProgress, "change", (latest) => {
         let target = Math.min(frameCount - 1, Math.floor(latest * frameCount));
-        // fall back to nearest loaded frame
         while (target > 0 && !loadedMask.current[target]) target--;
         drawFrame(target);
     });
 
-    // ── resize ───────────────────────────────────────────────────────────────
     useEffect(() => {
         const resize = () => {
             if (!canvasRef.current) return;
             canvasRef.current.width  = window.innerWidth;
             canvasRef.current.height = window.innerHeight;
-            lastFrame.current = -1;           // force redraw after resize
-            const f = lastFrame.current >= 0 ? lastFrame.current : 0;
+            lastFrame.current = -1;  // force redraw
             if (bitmaps.current[0]) drawFrame(0);
         };
         window.addEventListener("resize", resize);
@@ -149,7 +142,10 @@ function CanvasHero({ frameCount, dir, frameStep, scrollVh, onProgress, onReady 
     );
 }
 
-// ─── Entry point ─────────────────────────────────────────────────────────────
+// ─── Entry point ──────────────────────────────────────────────────────────────
+
+const MOBILE_FRAME_COUNT = 32;
+const MOBILE_FRAME_STEP  = 3;
 
 export default function ScrollyCanvas({ frameCount = 96 }: { frameCount?: number }) {
     const isMobile = useIsMobile();
@@ -159,56 +155,49 @@ export default function ScrollyCanvas({ frameCount = 96 }: { frameCount?: number
 
     useEffect(() => setMounted(true), []);
 
-    // Lock body scroll until all frames are loaded
+    // stable callbacks — won't cause CanvasHero's load effect to restart
+    const handleProgress = useCallback((p: number) => setProgress(p), []);
+    const handleReady    = useCallback(() => setReady(true), []);
+
+    // lock body scroll on mobile until ready
     useEffect(() => {
         if (!isMobile || ready) return;
+        const prev = document.body.style.overflow;
         document.body.style.overflow = "hidden";
-        return () => { document.body.style.overflow = ""; };
+        return () => { document.body.style.overflow = prev; };
     }, [isMobile, ready]);
 
     if (!mounted) return <div className="bg-[#121212]" style={{ height: "100vh" }} />;
 
-    const mobileProps: HeroProps = {
-        frameCount: MOBILE_FRAME_COUNT,
-        dir:        "/sequence-mobile/",
-        frameStep:  MOBILE_FRAME_STEP,
-        scrollVh:   300,
-        onProgress: setProgress,
-        onReady:    () => setReady(true),
-    };
-
-    const desktopProps: HeroProps = {
-        frameCount: frameCount,
-        dir:        "/sequence-webp/",
-        frameStep:  1,
-        scrollVh:   500,
-    };
-
-    const activeProps = isMobile ? mobileProps : desktopProps;
+    const props: HeroProps = isMobile
+        ? { frameCount: MOBILE_FRAME_COUNT, dir: "/sequence-mobile/", frameStep: MOBILE_FRAME_STEP, scrollVh: 300, onProgress: handleProgress, onReady: handleReady }
+        : { frameCount,                     dir: "/sequence-webp/",   frameStep: 1,                 scrollVh: 500, onProgress: handleProgress, onReady: handleReady };
 
     return (
         <div className="relative">
-            <CanvasHero {...activeProps} />
+            <CanvasHero {...props} />
 
-            {/* Mobile loading overlay — locks scroll, shows progress */}
-            {isMobile && !ready && (
-                <motion.div
-                    className="fixed inset-0 z-[100] bg-[#121212] flex flex-col items-center justify-center gap-6"
-                    animate={{ opacity: ready ? 0 : 1 }}
-                    transition={{ duration: 0.4 }}
-                >
-                    <p className="text-white/50 text-xs font-mono tracking-widest uppercase">Loading</p>
-                    {/* progress bar */}
-                    <div className="w-48 h-px bg-white/10 relative overflow-hidden">
-                        <motion.div
-                            className="absolute inset-y-0 left-0 bg-white"
-                            style={{ width: `${Math.round(progress * 100)}%` }}
-                            transition={{ duration: 0.15 }}
-                        />
-                    </div>
-                    <p className="text-white/30 text-xs font-mono">{Math.round(progress * 100)}%</p>
-                </motion.div>
-            )}
+            {/* AnimatePresence unmounts overlay after fade — no phantom blocking */}
+            <AnimatePresence>
+                {isMobile && !ready && (
+                    <motion.div
+                        key="mobile-loader"
+                        className="fixed inset-0 z-[100] bg-[#121212] flex flex-col items-center justify-center gap-6"
+                        initial={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.4 }}
+                    >
+                        <p className="text-white/50 text-xs font-mono tracking-widest uppercase">Loading</p>
+                        <div className="w-48 h-px bg-white/10 relative overflow-hidden">
+                            <div
+                                className="absolute inset-y-0 left-0 bg-white transition-all duration-150"
+                                style={{ width: `${Math.round(progress * 100)}%` }}
+                            />
+                        </div>
+                        <p className="text-white/30 text-xs font-mono">{Math.round(progress * 100)}%</p>
+                    </motion.div>
+                )}
+            </AnimatePresence>
         </div>
     );
 }
