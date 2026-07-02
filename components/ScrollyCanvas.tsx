@@ -169,7 +169,7 @@ function CanvasHero({ videoSrc, frameCount, scrollVh, onProgress, onFirstFrame, 
 
 // ─── Entry point ─────────────────────────────────────────────────────────────
 
-export default function ScrollyCanvas({ frameCount = 96 }: { frameCount?: number }) {
+export default function ScrollyCanvas({ frameCount = 48 }: { frameCount?: number }) {
     const isMobile = useIsMobile();
     const [mounted,    setMounted]    = useState(false);
     const [progress,   setProgress]   = useState(0);
