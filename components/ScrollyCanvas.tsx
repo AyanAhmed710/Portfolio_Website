@@ -234,7 +234,8 @@ export default function ScrollyCanvas() {
 
     const props: HeroProps = isMobile
         ? {
-            videoSrc:   "/hero-mobile.mp4",
+            frameSrc:   "/sequence-mobile",
+            frameStep:  3,
             frameCount: 32,
             scrollVh:   300,
             onProgress:   handleProgress,
