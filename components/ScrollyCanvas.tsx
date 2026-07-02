@@ -38,7 +38,11 @@ function drawBitmapCover(canvas: HTMLCanvasElement, bitmap: ImageBitmap) {
 // ─── Canvas hero ─────────────────────────────────────────────────────────────
 
 interface HeroProps {
-    videoSrc:     string;
+    // Mobile path: video seek extraction
+    videoSrc?: string;
+    // Desktop path: parallel WebP fetch (/sequence-webp, step 2 → 0000,0002,...)
+    frameSrc?: string;
+    frameStep?: number;
     frameCount:   number;
     scrollVh:     number;
     onProgress:   (p: number) => void;
@@ -46,7 +50,7 @@ interface HeroProps {
     onAllLoaded:  () => void;
 }
 
-function CanvasHero({ videoSrc, frameCount, scrollVh, onProgress, onFirstFrame, onAllLoaded }: HeroProps) {
+function CanvasHero({ videoSrc, frameSrc, frameStep = 1, frameCount, scrollVh, onProgress, onFirstFrame, onAllLoaded }: HeroProps) {
     const canvasRef    = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const bitmaps      = useRef<(ImageBitmap | null)[]>([]);
@@ -79,44 +83,69 @@ function CanvasHero({ videoSrc, frameCount, scrollVh, onProgress, onFirstFrame, 
         });
     }, []);
 
-    // ── Video frame extraction ───────────────────────────────────────────────
-    // Download 1 small MP4 → seek through each frame → extract to ImageBitmap
-    // Much faster than 96 individual fetch requests
+    // ── Desktop: parallel WebP fetch ─────────────────────────────────────────
+    // All frames fetched simultaneously via HTTP/2, decoded to ImageBitmap in parallel
     useEffect(() => {
+        if (!frameSrc) return;
         let cancelled = false;
-        bitmaps.current   = new Array(frameCount).fill(null);
+        bitmaps.current    = new Array(frameCount).fill(null);
+        loadedMask.current = new Array(frameCount).fill(false);
+        let loadedCount = 0;
+
+        const onFrameDone = (i: number, bitmap: ImageBitmap | null) => {
+            if (cancelled) return;
+            if (bitmap) {
+                bitmaps.current[i]    = bitmap;
+                loadedMask.current[i] = true;
+            }
+            loadedCount++;
+            progressRef.current(loadedCount / frameCount);
+            // Draw frame 0 as soon as it arrives — shows first image, triggers firstFrame
+            if (i === 0 && bitmap) { drawFrame(0); firstFrameRef.current(); }
+            if (loadedCount === frameCount) allLoadedRef.current();
+        };
+
+        Array.from({ length: frameCount }, (_, i) => {
+            const fileIdx = String(i * frameStep).padStart(4, "0");
+            fetch(`${frameSrc}/${fileIdx}.webp`)
+                .then(r => r.blob())
+                .then(blob => createImageBitmap(blob))
+                .then(bitmap => onFrameDone(i, bitmap))
+                .catch(() => onFrameDone(i, null));
+        });
+
+        return () => { cancelled = true; };
+    }, [frameSrc, frameStep, frameCount, drawFrame]);
+
+    // ── Mobile: video seek extraction ────────────────────────────────────────
+    // Download 1 MP4 → seek frame by frame → extract to ImageBitmap
+    useEffect(() => {
+        if (!videoSrc) return;
+        let cancelled = false;
+        bitmaps.current    = new Array(frameCount).fill(null);
         loadedMask.current = new Array(frameCount).fill(false);
 
         const video = document.createElement("video");
-        video.src        = videoSrc;
-        video.muted      = true;
+        video.src         = videoSrc;
+        video.muted       = true;
         video.playsInline = true;
-        video.preload    = "auto";
-        // crossOrigin needed for createImageBitmap on some browsers
+        video.preload     = "auto";
         video.crossOrigin = "anonymous";
 
         const extract = async () => {
             if (cancelled) return;
             const duration = video.duration;
-
             for (let i = 0; i < frameCount; i++) {
                 if (cancelled) return;
-
-                // Seek to the position for this frame
                 video.currentTime = (i / frameCount) * duration;
                 await new Promise<void>((resolve) => {
                     video.addEventListener("seeked", () => resolve(), { once: true });
                 });
-
                 if (cancelled) return;
-
                 try {
                     bitmaps.current[i]    = await createImageBitmap(video);
                     loadedMask.current[i] = true;
-                } catch {
-                    // frame decode failed — leave null, scroll falls back to nearest
-                }
-
+                } catch { /* leave null */ }
                 progressRef.current((i + 1) / frameCount);
                 if (i === 0) { drawFrame(0); firstFrameRef.current(); }
                 if (i === frameCount - 1) allLoadedRef.current();
@@ -124,17 +153,10 @@ function CanvasHero({ videoSrc, frameCount, scrollVh, onProgress, onFirstFrame, 
         };
 
         video.addEventListener("canplaythrough", extract, { once: true });
-        video.addEventListener("error", () => {
-            // If video fails, nothing to do — loading bar just stays
-            console.error("Video load failed:", videoSrc);
-        }, { once: true });
-
+        video.addEventListener("error", () => console.error("Video load failed:", videoSrc), { once: true });
         video.load();
 
-        return () => {
-            cancelled = true;
-            video.src = "";
-        };
+        return () => { cancelled = true; video.src = ""; };
     }, [videoSrc, frameCount, drawFrame]);
 
     useMotionValueEvent(scrollYProgress, "change", (latest) => {
@@ -169,7 +191,7 @@ function CanvasHero({ videoSrc, frameCount, scrollVh, onProgress, onFirstFrame, 
 
 // ─── Entry point ─────────────────────────────────────────────────────────────
 
-export default function ScrollyCanvas({ frameCount = 48 }: { frameCount?: number }) {
+export default function ScrollyCanvas() {
     const isMobile = useIsMobile();
     const [mounted,    setMounted]    = useState(false);
     const [progress,   setProgress]   = useState(0);
@@ -182,7 +204,7 @@ export default function ScrollyCanvas({ frameCount = 48 }: { frameCount?: number
     const handleFirstFrame = useCallback(() => setFirstFrame(true), []);
     const handleAllLoaded  = useCallback(() => setAllLoaded(true),  []);
 
-    // Lock scroll until all frames extracted into GPU memory
+    // Lock scroll until all frames in GPU memory
     useEffect(() => {
         if (allLoaded) return;
         const prev = document.body.style.overflow;
@@ -192,14 +214,24 @@ export default function ScrollyCanvas({ frameCount = 48 }: { frameCount?: number
 
     if (!mounted) return <div className="bg-[#121212]" style={{ height: "100vh" }} />;
 
-    const props: HeroProps = {
-        videoSrc:     isMobile ? "/hero-mobile.mp4" : "/hero-desktop.mp4",
-        frameCount:   isMobile ? 32 : frameCount,
-        scrollVh:     isMobile ? 300 : 500,
-        onProgress:   handleProgress,
-        onFirstFrame: handleFirstFrame,
-        onAllLoaded:  handleAllLoaded,
-    };
+    const props: HeroProps = isMobile
+        ? {
+            videoSrc:   "/hero-mobile.mp4",
+            frameCount: 32,
+            scrollVh:   300,
+            onProgress:   handleProgress,
+            onFirstFrame: handleFirstFrame,
+            onAllLoaded:  handleAllLoaded,
+        }
+        : {
+            frameSrc:   "/sequence-webp",
+            frameStep:  2,
+            frameCount: 48,
+            scrollVh:   500,
+            onProgress:   handleProgress,
+            onFirstFrame: handleFirstFrame,
+            onAllLoaded:  handleAllLoaded,
+        };
 
     return (
         <div className="relative">
