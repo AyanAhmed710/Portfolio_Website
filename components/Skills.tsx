@@ -134,7 +134,7 @@ const categories = [
 
 function CategoryCards() {
     return (
-        <div className="md:hidden px-4 mt-10 space-y-4">
+        <div className="px-4 md:px-16 mt-10 grid grid-cols-1 md:grid-cols-3 gap-4">
             {categories.map((cat, idx) => (
                 <motion.div
                     key={cat.label}
